@@ -12,13 +12,25 @@ function App() {
   const [showGallery, setShowGallery] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [showBeforePrompt, setShowBeforePrompt] = useState(false);
   const fileInputRef = useRef(null);
+  const beforeInputRef = useRef(null);
 
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     loadData();
   }, []);
+
+  // Check if we need to show the before photo prompt
+  useEffect(() => {
+    if (!loading) {
+      const totalPushups = Object.values(entries).reduce((a, b) => a + b, 0);
+      if (totalPushups === 0 && !photos[0]) {
+        setShowBeforePrompt(true);
+      }
+    }
+  }, [loading, entries, photos]);
 
   const loadData = () => {
     try {
@@ -121,6 +133,54 @@ function App() {
     reader.readAsDataURL(file);
   };
 
+  const handleBeforePhotoUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxSize = 400;
+        let { width, height } = img;
+        
+        if (width > height) {
+          if (width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+        
+        const newPhotos = { 
+          ...photos, 
+          [0]: {
+            data: compressedBase64,
+            date: new Date().toISOString(),
+            milestone: 0
+          }
+        };
+        setPhotos(newPhotos);
+        saveData(entries, newPhotos);
+        setShowBeforePrompt(false);
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Calculate stats
   const totalPushups = Object.values(entries).reduce((a, b) => a + b, 0);
   const todayCount = entries[today] || 0;
@@ -184,6 +244,53 @@ function App() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
         <div className="text-white text-xl">Loading...</div>
+      </div>
+    );
+  }
+
+  // Before photo prompt (Day 0)
+  if (showBeforePrompt) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
+        <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-6 max-w-sm w-full text-center">
+          <div className="text-6xl mb-4">📸</div>
+          <h2 className="text-3xl font-black text-white mb-2">
+            BEFORE PHOTO
+          </h2>
+          <p className="text-purple-200 mb-6">
+            Capture your Day 0 starting point. You'll thank yourself at 100k.
+          </p>
+          
+          <div className="bg-purple-500/20 rounded-xl p-4 mb-6 text-left">
+            <div className="text-purple-300 text-sm font-medium mb-2">📸 Pick your pose:</div>
+            <p className="text-white text-sm">
+              Front-facing mirror selfie — relaxed or flexing. Use the same pose for every milestone!
+            </p>
+          </div>
+
+          <input
+            ref={beforeInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleBeforePhotoUpload}
+            className="hidden"
+          />
+          
+          <button
+            onClick={() => beforeInputRef.current?.click()}
+            className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold py-4 rounded-xl mb-3 hover:opacity-90 transition-all active:scale-95"
+          >
+            📷 Take Starting Photo
+          </button>
+          
+          <button
+            onClick={() => setShowBeforePrompt(false)}
+            className="w-full bg-white/10 text-purple-300 font-medium py-3 rounded-xl hover:bg-white/20 transition-all"
+          >
+            Skip for now
+          </button>
+        </div>
       </div>
     );
   }
@@ -270,7 +377,9 @@ function App() {
                 </div>
                 <div className="text-center">
                   <div className="text-white font-bold text-xl">
-                    Level {photosArray[galleryIndex]?.milestone / 1000} Complete
+                    {photosArray[galleryIndex]?.milestone === 0 
+                      ? 'Starting Point' 
+                      : `Level ${photosArray[galleryIndex]?.milestone / 1000} Complete`}
                   </div>
                   <div className="text-purple-300 text-sm">
                     {new Date(photosArray[galleryIndex]?.date).toLocaleDateString('en-US', {
@@ -324,13 +433,19 @@ function App() {
                       <div className="aspect-square rounded-xl overflow-hidden bg-black/30 mb-2">
                         <img src={photosArray[0].data} alt="First" className="w-full h-full object-cover" />
                       </div>
-                      <div className="text-center text-white text-sm">Level 1</div>
+                      <div className="text-center text-white text-sm">
+                        {photosArray[0].milestone === 0 ? 'Day 0' : `Level ${photosArray[0].milestone / 1000}`}
+                      </div>
                     </div>
                     <div className="flex-1">
                       <div className="aspect-square rounded-xl overflow-hidden bg-black/30 mb-2">
                         <img src={photosArray[photosArray.length - 1].data} alt="Latest" className="w-full h-full object-cover" />
                       </div>
-                      <div className="text-center text-white text-sm">Level {photosArray[photosArray.length - 1].milestone / 1000}</div>
+                      <div className="text-center text-white text-sm">
+                        {photosArray[photosArray.length - 1].milestone === 0 
+                          ? 'Day 0' 
+                          : `Level ${photosArray[photosArray.length - 1].milestone / 1000}`}
+                      </div>
                     </div>
                   </div>
                 </div>
