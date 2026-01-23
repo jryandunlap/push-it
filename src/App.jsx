@@ -1,7 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 const GOAL = 100000;
-const STORAGE_KEY = 'pushup-quest-data';
+const STORAGE_KEY = 'pushup-quest-entries';
+const DB_NAME = 'pushup-quest-db';
+const DB_VERSION = 1;
+const PHOTO_STORE = 'photos';
+
+// IndexedDB helpers
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(PHOTO_STORE)) {
+        db.createObjectStore(PHOTO_STORE, { keyPath: 'milestone' });
+      }
+    };
+  });
+};
+
+const savePhoto = async (milestone, photoData) => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readwrite');
+    const store = tx.objectStore(PHOTO_STORE);
+    const request = store.put({ milestone, ...photoData });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const loadPhotos = async () => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(PHOTO_STORE, 'readonly');
+    const store = tx.objectStore(PHOTO_STORE);
+    const request = store.getAll();
+    request.onsuccess = () => {
+      const photos = {};
+      request.result.forEach(p => {
+        photos[p.milestone] = { data: p.data, date: p.date, milestone: p.milestone };
+      });
+      resolve(photos);
+    };
+    request.onerror = () => reject(request.error);
+  });
+};
 
 function App() {
   const [entries, setEntries] = useState({});
@@ -13,13 +59,19 @@ function App() {
   const [showStats, setShowStats] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [showBeforePrompt, setShowBeforePrompt] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const fileInputRef = useRef(null);
   const beforeInputRef = useRef(null);
+  const playIntervalRef = useRef(null);
 
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
     loadData();
+    return () => {
+      if (playIntervalRef.current) clearInterval(playIntervalRef.current);
+    };
   }, []);
 
   // Check if we need to show the before photo prompt
@@ -32,29 +84,72 @@ function App() {
     }
   }, [loading, entries, photos]);
 
-  const loadData = () => {
+  const loadData = async () => {
     try {
+      // Load entries from localStorage (small data)
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const data = JSON.parse(stored);
-        setEntries(data.entries || {});
-        setPhotos(data.photos || {});
+        setEntries(JSON.parse(stored));
       }
+      // Load photos from IndexedDB (large data)
+      const loadedPhotos = await loadPhotos();
+      setPhotos(loadedPhotos);
     } catch (e) {
-      console.log('No existing data');
+      console.log('Error loading data:', e);
     }
     setLoading(false);
   };
 
-  const saveData = (newEntries, newPhotos) => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      entries: newEntries,
-      photos: newPhotos
-    }));
+  const saveEntries = (newEntries) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newEntries));
   };
 
   const getMilestone = (count) => Math.floor(count / 1000) * 1000;
   const getNextMilestone = (count) => Math.ceil((count + 1) / 1000) * 1000;
+
+  const processAndSavePhoto = async (file, milestone, onComplete) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement('canvas');
+        const maxSize = 2048;
+        let { width, height } = img;
+        
+        if (width > height) {
+          if (width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.9);
+        
+        const photoData = {
+          data: compressedBase64,
+          date: new Date().toISOString(),
+          milestone
+        };
+        
+        await savePhoto(milestone, photoData);
+        const newPhotos = { ...photos, [milestone]: photoData };
+        setPhotos(newPhotos);
+        onComplete();
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const addPushups = (count) => {
     const oldTotal = Object.values(entries).reduce((a, b) => a + b, 0);
@@ -65,7 +160,7 @@ function App() {
     setEntries(newEntries);
     setTodayAdd(prev => prev + count);
     setTimeout(() => setTodayAdd(0), 400);
-    saveData(newEntries, photos);
+    saveEntries(newEntries);
 
     const oldMilestone = getMilestone(oldTotal);
     const newMilestone = getMilestone(newTotal);
@@ -82,112 +177,87 @@ function App() {
     newEntries[today] = Math.max(0, (newEntries[today] || 0) - count);
     if (newEntries[today] === 0) delete newEntries[today];
     setEntries(newEntries);
-    saveData(newEntries, photos);
+    saveEntries(newEntries);
   };
 
   const handlePhotoUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file || !showPhotoPrompt) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const maxSize = 400;
-        let { width, height } = img;
-        
-        if (width > height) {
-          if (width > maxSize) {
-            height = (height * maxSize) / width;
-            width = maxSize;
-          }
-        } else {
-          if (height > maxSize) {
-            width = (width * maxSize) / height;
-            height = maxSize;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-        
-        const newPhotos = { 
-          ...photos, 
-          [showPhotoPrompt]: {
-            data: compressedBase64,
-            date: new Date().toISOString(),
-            milestone: showPhotoPrompt
-          }
-        };
-        setPhotos(newPhotos);
-        saveData(entries, newPhotos);
-        setShowPhotoPrompt(null);
-      };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
+    processAndSavePhoto(file, showPhotoPrompt, () => setShowPhotoPrompt(null));
   };
 
   const handleBeforePhotoUpload = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const maxSize = 400;
-        let { width, height } = img;
-        
-        if (width > height) {
-          if (width > maxSize) {
-            height = (height * maxSize) / width;
-            width = maxSize;
-          }
-        } else {
-          if (height > maxSize) {
-            width = (width * maxSize) / height;
-            height = maxSize;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
-        
-        const newPhotos = { 
-          ...photos, 
-          [0]: {
-            data: compressedBase64,
-            date: new Date().toISOString(),
-            milestone: 0
-          }
-        };
-        setPhotos(newPhotos);
-        saveData(entries, newPhotos);
-        setShowBeforePrompt(false);
-      };
-      img.src = event.target.result;
-    };
-    reader.readAsDataURL(file);
+    processAndSavePhoto(file, 0, () => setShowBeforePrompt(false));
   };
 
-  // Calculate stats
+  // Calculate stats (needed for time-lapse)
   const totalPushups = Object.values(entries).reduce((a, b) => a + b, 0);
+  const photosArray = Object.entries(photos)
+    .sort(([a], [b]) => Number(a) - Number(b))
+    .map(([milestone, data]) => ({ milestone: Number(milestone), ...data }));
+
+  // Time-lapse controls
+  const startTimelapse = () => {
+    setIsPlaying(true);
+    setGalleryIndex(0);
+    playIntervalRef.current = setInterval(() => {
+      setGalleryIndex(prev => {
+        const nextIndex = prev + 1;
+        if (nextIndex >= photosArray.length) {
+          clearInterval(playIntervalRef.current);
+          setIsPlaying(false);
+          return prev;
+        }
+        return nextIndex;
+      });
+    }, 500);
+  };
+
+  const stopTimelapse = () => {
+    if (playIntervalRef.current) {
+      clearInterval(playIntervalRef.current);
+    }
+    setIsPlaying(false);
+  };
+
+  // Download all photos as zip
+  const downloadAllPhotos = async () => {
+    setIsDownloading(true);
+    try {
+      const JSZip = (await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm')).default;
+      const zip = new JSZip();
+      
+      photosArray.forEach((photo, index) => {
+        const base64Data = photo.data.split(',')[1];
+        const filename = photo.milestone === 0 
+          ? `00_day0_starting_point.jpg`
+          : `${String(index).padStart(2, '0')}_level${photo.milestone / 1000}_${photo.milestone}pushups.jpg`;
+        zip.file(filename, base64Data, { base64: true });
+      });
+      
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pushup-quest-photos-${new Date().toISOString().split('T')[0]}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Download failed:', e);
+      alert('Download failed. Try again.');
+    }
+    setIsDownloading(false);
+  };
+
+  // More stats
   const todayCount = entries[today] || 0;
   const daysWithEntries = Object.keys(entries).length;
   const dailyAverage = daysWithEntries > 0 ? Math.round(totalPushups / daysWithEntries) : 0;
   
-  // Current level/milestone info
   const currentLevel = Math.floor(totalPushups / 1000) + 1;
   const nextMilestone = getNextMilestone(totalPushups);
   const prevMilestone = getMilestone(totalPushups);
@@ -235,10 +305,6 @@ function App() {
     return days > 0 ? Math.round(sum / days) : 0;
   };
   const weeklyAvg = getWeeklyAvg();
-
-  const photosArray = Object.entries(photos)
-    .sort(([a], [b]) => Number(a) - Number(b))
-    .map(([milestone, data]) => ({ milestone: Number(milestone), ...data }));
 
   if (loading) {
     return (
@@ -342,7 +408,7 @@ function App() {
     );
   }
 
-  // Gallery view
+  // Gallery view with time-lapse
   if (showGallery) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
@@ -350,7 +416,7 @@ function App() {
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-bold text-white">📸 Progress Photos</h2>
             <button
-              onClick={() => setShowGallery(false)}
+              onClick={() => { stopTimelapse(); setShowGallery(false); }}
               className="bg-white/10 px-4 py-2 rounded-lg text-purple-300 hover:bg-white/20 transition-colors"
             >
               ← Back
@@ -389,32 +455,46 @@ function App() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-center gap-4 mb-6">
+              {/* Navigation & Time-lapse controls */}
+              <div className="flex items-center justify-center gap-3 mb-4">
                 <button
-                  onClick={() => setGalleryIndex(Math.max(0, galleryIndex - 1))}
-                  disabled={galleryIndex === 0}
+                  onClick={() => { stopTimelapse(); setGalleryIndex(Math.max(0, galleryIndex - 1)); }}
+                  disabled={galleryIndex === 0 || isPlaying}
                   className="w-12 h-12 rounded-full bg-white/10 text-white font-bold disabled:opacity-30 hover:bg-white/20 transition-all"
                 >
                   ←
                 </button>
-                <span className="text-purple-300">
-                  {galleryIndex + 1} / {photosArray.length}
-                </span>
+                
+                {/* Play/Pause button */}
                 <button
-                  onClick={() => setGalleryIndex(Math.min(photosArray.length - 1, galleryIndex + 1))}
-                  disabled={galleryIndex === photosArray.length - 1}
+                  onClick={isPlaying ? stopTimelapse : startTimelapse}
+                  disabled={photosArray.length < 2}
+                  className="w-14 h-14 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold text-xl disabled:opacity-30 hover:opacity-90 transition-all flex items-center justify-center"
+                >
+                  {isPlaying ? '⏸' : '▶'}
+                </button>
+                
+                <button
+                  onClick={() => { stopTimelapse(); setGalleryIndex(Math.min(photosArray.length - 1, galleryIndex + 1)); }}
+                  disabled={galleryIndex === photosArray.length - 1 || isPlaying}
                   className="w-12 h-12 rounded-full bg-white/10 text-white font-bold disabled:opacity-30 hover:bg-white/20 transition-all"
                 >
                   →
                 </button>
               </div>
+              
+              <div className="text-center text-purple-300 text-sm mb-4">
+                {galleryIndex + 1} / {photosArray.length}
+                {isPlaying && <span className="ml-2 text-pink-400">Playing...</span>}
+              </div>
 
-              <div className="flex gap-2 overflow-x-auto pb-2">
+              {/* Thumbnail strip */}
+              <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
                 {photosArray.map((photo, idx) => (
                   <button
                     key={photo.milestone}
-                    onClick={() => setGalleryIndex(idx)}
-                    className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                    onClick={() => { stopTimelapse(); setGalleryIndex(idx); }}
+                    className={`flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 transition-all ${
                       idx === galleryIndex ? 'border-purple-400 scale-105' : 'border-transparent opacity-60'
                     }`}
                   >
@@ -423,8 +503,22 @@ function App() {
                 ))}
               </div>
 
+              {/* Download All button */}
+              <button
+                onClick={downloadAllPhotos}
+                disabled={isDownloading}
+                className="w-full bg-white/10 hover:bg-white/20 text-white font-medium py-3 rounded-xl transition-all flex items-center justify-center gap-2 mb-4"
+              >
+                {isDownloading ? (
+                  <>⏳ Preparing download...</>
+                ) : (
+                  <>📥 Download All Photos ({photosArray.length})</>
+                )}
+              </button>
+
+              {/* Transformation comparison */}
               {photosArray.length >= 2 && (
-                <div className="mt-6 bg-white/5 rounded-2xl p-4">
+                <div className="bg-white/5 rounded-2xl p-4">
                   <div className="text-purple-300 text-xs uppercase tracking-wider mb-3 text-center">
                     Your Transformation
                   </div>
@@ -473,7 +567,6 @@ function App() {
             </button>
           </div>
 
-          {/* Overall Progress */}
           <div className="bg-white/10 backdrop-blur rounded-2xl p-5 mb-4">
             <div className="text-purple-300 text-xs uppercase tracking-wider mb-2">Overall Progress</div>
             <div className="text-4xl font-black text-white mb-1">
@@ -488,7 +581,6 @@ function App() {
             <div className="text-purple-300 text-sm">{overallPercent.toFixed(2)}% complete • {remaining.toLocaleString()} remaining</div>
           </div>
 
-          {/* Projection */}
           {dailyAverage > 0 && (
             <div className="bg-gradient-to-r from-orange-500/20 to-amber-500/20 rounded-2xl p-4 mb-4">
               <div className="text-orange-300 text-xs uppercase tracking-wider mb-1">🎯 Projected Finish</div>
@@ -501,7 +593,6 @@ function App() {
             </div>
           )}
 
-          {/* Stats Grid */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-white/5 rounded-xl p-4">
               <div className="text-purple-300 text-xs uppercase">🔥 Streak</div>
@@ -529,7 +620,6 @@ function App() {
             </div>
           </div>
 
-          {/* Levels Completed */}
           <div className="bg-white/5 rounded-2xl p-4">
             <div className="text-purple-300 text-xs uppercase tracking-wider mb-3">Levels Completed</div>
             <div className="flex flex-wrap gap-2">
@@ -563,12 +653,11 @@ function App() {
     );
   }
 
-  // Main view - focused on next milestone
+  // Main view
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4 pb-8">
       <div className="max-w-md mx-auto space-y-4">
         
-        {/* Header - minimal */}
         <div className="flex items-center justify-between pt-2">
           <div>
             <h1 className="text-lg font-bold text-white">💪 Push-Up Quest</h1>
@@ -589,11 +678,9 @@ function App() {
           </div>
         </div>
 
-        {/* HERO: Next Milestone Progress */}
         <div className="bg-gradient-to-br from-purple-600/30 to-pink-600/30 backdrop-blur rounded-3xl p-6 text-center border border-white/10">
           <div className="text-purple-200 text-sm font-medium mb-1">LEVEL {currentLevel}</div>
           
-          {/* Circular progress indicator */}
           <div className="relative w-48 h-48 mx-auto my-4">
             <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
               <circle
@@ -635,7 +722,6 @@ function App() {
           )}
         </div>
 
-        {/* Today + Quick Add */}
         <div className="bg-white/10 backdrop-blur rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
             <div>
@@ -658,7 +744,6 @@ function App() {
             </div>
           </div>
           
-          {/* Quick add row */}
           <div className="grid grid-cols-4 gap-2">
             {[5, 10, 25, 50].map(num => (
               <button
@@ -672,7 +757,6 @@ function App() {
           </div>
         </div>
 
-        {/* Mini Stats Row */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-white/5 rounded-xl p-3 text-center">
             <div className="text-orange-400 text-lg font-bold">{currentStreak}🔥</div>
@@ -688,7 +772,6 @@ function App() {
           </div>
         </div>
 
-        {/* Overall progress - small and subtle */}
         <div className="bg-white/5 rounded-xl p-3">
           <div className="flex items-center justify-between text-sm mb-1.5">
             <span className="text-purple-300">Overall: {((totalPushups / GOAL) * 100).toFixed(1)}%</span>
@@ -702,7 +785,6 @@ function App() {
           </div>
         </div>
 
-        {/* Motivational footer */}
         {dailyAverage > 0 && (
           <div className="text-center text-purple-300 text-sm">
             At this pace, level {currentLevel} done in <span className="text-white font-medium">{Math.ceil(remainingInLevel / dailyAverage)} days</span>
