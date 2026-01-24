@@ -749,14 +749,14 @@ function App() {
             </svg>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <div className="text-5xl font-black text-white tabular-nums">
-                {remainingInLevel}
+                {progressInLevel}
               </div>
-              <div className="text-purple-200 text-sm">to go</div>
+              <div className="text-purple-200 text-sm">of 1,000</div>
             </div>
           </div>
 
           <div className="text-white font-medium">
-            <span className="text-purple-300">{progressInLevel}</span> / 1,000 → <span className="font-bold">{nextMilestone.toLocaleString()}</span>
+            <span className="text-purple-300">{remainingInLevel} more</span> → <span className="font-bold">{nextMilestone.toLocaleString()}</span>
           </div>
           
           {todayAdd > 0 && (
