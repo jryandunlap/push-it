@@ -65,7 +65,13 @@ function App() {
   const beforeInputRef = useRef(null);
   const playIntervalRef = useRef(null);
 
-  const today = new Date().toISOString().split('T')[0];
+  // Use local date, not UTC
+  const getLocalDateString = (date) => {
+    const d = date || new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  
+  const today = getLocalDateString();
 
   useEffect(() => {
     loadData();
@@ -86,12 +92,41 @@ function App() {
 
   const loadData = async () => {
     try {
-      // Load entries from localStorage (small data)
+      // Try to load from new format first
+      let loadedEntries = {};
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        setEntries(JSON.parse(stored));
+        loadedEntries = JSON.parse(stored);
       }
-      // Load photos from IndexedDB (large data)
+      
+      // Migrate from old formats if new format is empty
+      if (Object.keys(loadedEntries).length === 0) {
+        // Check for old v3 format
+        const oldV3 = localStorage.getItem('pushup-data-v3');
+        if (oldV3) {
+          const data = JSON.parse(oldV3);
+          if (data.entries) {
+            loadedEntries = data.entries;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(loadedEntries));
+            console.log('Migrated from v3 format');
+          }
+        }
+        
+        // Check for old v2 format
+        const oldV2 = localStorage.getItem('pushup-data-v2');
+        if (oldV2 && Object.keys(loadedEntries).length === 0) {
+          const data = JSON.parse(oldV2);
+          if (data.entries) {
+            loadedEntries = data.entries;
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(loadedEntries));
+            console.log('Migrated from v2 format');
+          }
+        }
+      }
+      
+      setEntries(loadedEntries);
+      
+      // Load photos from IndexedDB
       const loadedPhotos = await loadPhotos();
       setPhotos(loadedPhotos);
     } catch (e) {
@@ -241,7 +276,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `pushup-quest-photos-${new Date().toISOString().split('T')[0]}.zip`;
+      a.download = `pushup-quest-photos-${getLocalDateString()}.zip`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -273,9 +308,16 @@ function App() {
   
   const calculateStreak = () => {
     let streak = 0;
-    let checkDate = new Date(today);
+    let checkDate = new Date();
+    
+    // If no entries today, start from yesterday (today isn't over yet)
+    const todayStr = getLocalDateString(checkDate);
+    if (!entries[todayStr] || entries[todayStr] === 0) {
+      checkDate.setDate(checkDate.getDate() - 1);
+    }
+    
     while (true) {
-      const dateStr = checkDate.toISOString().split('T')[0];
+      const dateStr = getLocalDateString(checkDate);
       if (entries[dateStr] && entries[dateStr] > 0) {
         streak++;
         checkDate.setDate(checkDate.getDate() - 1);
@@ -296,7 +338,7 @@ function App() {
     for (let i = 0; i < 7; i++) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = getLocalDateString(d);
       if (entries[dateStr]) {
         sum += entries[dateStr];
         days++;
