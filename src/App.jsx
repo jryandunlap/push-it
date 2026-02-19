@@ -92,7 +92,6 @@ function App() {
 
   const loadData = async () => {
     try {
-      // Try to load from new format first
       let loadedEntries = {};
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
@@ -101,32 +100,26 @@ function App() {
       
       // Migrate from old formats if new format is empty
       if (Object.keys(loadedEntries).length === 0) {
-        // Check for old v3 format
         const oldV3 = localStorage.getItem('pushup-data-v3');
         if (oldV3) {
           const data = JSON.parse(oldV3);
           if (data.entries) {
             loadedEntries = data.entries;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(loadedEntries));
-            console.log('Migrated from v3 format');
           }
         }
         
-        // Check for old v2 format
         const oldV2 = localStorage.getItem('pushup-data-v2');
         if (oldV2 && Object.keys(loadedEntries).length === 0) {
           const data = JSON.parse(oldV2);
           if (data.entries) {
             loadedEntries = data.entries;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(loadedEntries));
-            console.log('Migrated from v2 format');
           }
         }
       }
       
       setEntries(loadedEntries);
-      
-      // Load photos from IndexedDB
       const loadedPhotos = await loadPhotos();
       setPhotos(loadedPhotos);
     } catch (e) {
@@ -227,7 +220,7 @@ function App() {
     processAndSavePhoto(file, 0, () => setShowBeforePrompt(false));
   };
 
-  // Calculate stats (needed for time-lapse)
+  // Calculate stats
   const totalPushups = Object.values(entries).reduce((a, b) => a + b, 0);
   const photosArray = Object.entries(photos)
     .sort(([a], [b]) => Number(a) - Number(b))
@@ -310,7 +303,6 @@ function App() {
     let streak = 0;
     let checkDate = new Date();
     
-    // If no entries today, start from yesterday (today isn't over yet)
     const todayStr = getLocalDateString(checkDate);
     if (!entries[todayStr] || entries[todayStr] === 0) {
       checkDate.setDate(checkDate.getDate() - 1);
@@ -327,6 +319,7 @@ function App() {
     }
     return streak;
   };
+  
   const currentStreak = calculateStreak();
   const bestDay = Math.max(0, ...Object.values(entries));
   const remaining = GOAL - totalPushups;
@@ -403,23 +396,88 @@ function App() {
     );
   }
 
-  // Photo prompt modal
+  // Photo prompt modal with celebration stats
   if (showPhotoPrompt) {
+    const milestoneNum = showPhotoPrompt / 1000;
+    const prevMilestoneTotal = showPhotoPrompt - 1000;
+    
+    // Find when we crossed the previous milestone
+    let levelStartDate = null;
+    let runningTotal = 0;
+    const sortedEntryDates = Object.keys(entries).sort();
+    
+    for (const date of sortedEntryDates) {
+      if (runningTotal <= prevMilestoneTotal) {
+        levelStartDate = date;
+      }
+      runningTotal += entries[date];
+    }
+    
+    if (!levelStartDate) levelStartDate = sortedEntryDates[0] || today;
+    
+    // Calculate days for this level
+    const startDate = new Date(levelStartDate);
+    const endDate = new Date();
+    const daysForLevel = Math.max(1, Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1);
+    
+    // Calculate push-ups done during this level period
+    let pushupsThisLevel = 0;
+    let bestDayThisLevel = 0;
+    let activeDaysThisLevel = 0;
+    
+    for (const date of sortedEntryDates) {
+      if (date >= levelStartDate) {
+        pushupsThisLevel += entries[date];
+        activeDaysThisLevel++;
+        if (entries[date] > bestDayThisLevel) {
+          bestDayThisLevel = entries[date];
+        }
+      }
+    }
+    
+    const avgPerDayThisLevel = Math.round(pushupsThisLevel / daysForLevel);
+    
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4">
         <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-6 max-w-sm w-full text-center">
-          <div className="text-6xl mb-4">🎉</div>
-          <h2 className="text-3xl font-black text-white mb-2">
-            LEVEL {showPhotoPrompt / 1000} COMPLETE!
+          <div className="text-6xl mb-2">🎉</div>
+          <h2 className="text-3xl font-black text-white mb-1">
+            LEVEL {milestoneNum} COMPLETE!
           </h2>
           <p className="text-purple-200 mb-6">
-            You hit {showPhotoPrompt.toLocaleString()} push-ups! Capture your progress.
+            You crushed {showPhotoPrompt.toLocaleString()} push-ups!
           </p>
           
-          <div className="bg-purple-500/20 rounded-xl p-4 mb-6 text-left">
-            <div className="text-purple-300 text-sm font-medium mb-2">📸 Same pose, every time:</div>
+          {/* Stats cards */}
+          <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="bg-white/10 rounded-xl p-3">
+              <div className="text-3xl font-black text-white">{daysForLevel}</div>
+              <div className="text-purple-300 text-xs uppercase">Days this level</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-3">
+              <div className="text-3xl font-black text-white">{avgPerDayThisLevel}</div>
+              <div className="text-purple-300 text-xs uppercase">Avg per day</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-3">
+              <div className="text-3xl font-black text-white">{bestDayThisLevel}</div>
+              <div className="text-purple-300 text-xs uppercase">Best day</div>
+            </div>
+            <div className="bg-white/10 rounded-xl p-3">
+              <div className="text-3xl font-black text-white">{activeDaysThisLevel}</div>
+              <div className="text-purple-300 text-xs uppercase">Active days</div>
+            </div>
+          </div>
+
+          {/* Motivational message */}
+          <div className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-xl p-4 mb-6">
             <p className="text-white text-sm">
-              Front-facing mirror selfie. Pick relaxed or flexing and stick with it!
+              {milestoneNum === 1 
+                ? "Your first milestone! This is where it all begins. 💪" 
+                : milestoneNum < 10 
+                  ? "Building momentum! Keep stacking those levels. 🔥"
+                  : milestoneNum < 50 
+                    ? "You're a machine! Halfway to greatness. 💪"
+                    : "Legend status incoming. The finish line is in sight! 🏆"}
             </p>
           </div>
 
@@ -436,14 +494,14 @@ function App() {
             onClick={() => fileInputRef.current?.click()}
             className="w-full bg-gradient-to-r from-purple-500 to-pink-500 text-white font-bold py-4 rounded-xl mb-3 hover:opacity-90 transition-all active:scale-95"
           >
-            📷 Take Progress Photo
+            📷 Capture This Moment
           </button>
           
           <button
             onClick={() => setShowPhotoPrompt(null)}
             className="w-full bg-white/10 text-purple-300 font-medium py-3 rounded-xl hover:bg-white/20 transition-all"
           >
-            Skip for now
+            Skip photo
           </button>
         </div>
       </div>
@@ -497,7 +555,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Navigation & Time-lapse controls */}
               <div className="flex items-center justify-center gap-3 mb-4">
                 <button
                   onClick={() => { stopTimelapse(); setGalleryIndex(Math.max(0, galleryIndex - 1)); }}
@@ -507,7 +564,6 @@ function App() {
                   ←
                 </button>
                 
-                {/* Play/Pause button */}
                 <button
                   onClick={isPlaying ? stopTimelapse : startTimelapse}
                   disabled={photosArray.length < 2}
@@ -530,7 +586,6 @@ function App() {
                 {isPlaying && <span className="ml-2 text-pink-400">Playing...</span>}
               </div>
 
-              {/* Thumbnail strip */}
               <div className="flex gap-2 overflow-x-auto pb-2 mb-4">
                 {photosArray.map((photo, idx) => (
                   <button
@@ -545,7 +600,6 @@ function App() {
                 ))}
               </div>
 
-              {/* Download All button */}
               <button
                 onClick={downloadAllPhotos}
                 disabled={isDownloading}
@@ -558,7 +612,6 @@ function App() {
                 )}
               </button>
 
-              {/* Transformation comparison */}
               {photosArray.length >= 2 && (
                 <div className="bg-white/5 rounded-2xl p-4">
                   <div className="text-purple-300 text-xs uppercase tracking-wider mb-3 text-center">
@@ -673,7 +726,6 @@ function App() {
                     className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold ${
                       hasPhoto ? 'bg-pink-500 text-white' : 'bg-green-500/80 text-white'
                     }`}
-                    title={hasPhoto ? 'Photo captured' : 'No photo'}
                   >
                     {level}
                   </div>
