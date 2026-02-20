@@ -57,6 +57,8 @@ function App() {
   const [showPhotoPrompt, setShowPhotoPrompt] = useState(null);
   const [showGallery, setShowGallery] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [showBeforePrompt, setShowBeforePrompt] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -646,6 +648,171 @@ function App() {
     );
   }
 
+  // Calendar view
+  if (showCalendar) {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const firstDayOfMonth = new Date(year, month, 1);
+    const lastDayOfMonth = new Date(year, month + 1, 0);
+    const daysInMonth = lastDayOfMonth.getDate();
+    const startingDayOfWeek = firstDayOfMonth.getDay();
+    
+    // Get first entry date to know when tracking started
+    const sortedEntryDates = Object.keys(entries).sort();
+    const firstEntryDate = sortedEntryDates[0] ? new Date(sortedEntryDates[0]) : null;
+    
+    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 
+                        'July', 'August', 'September', 'October', 'November', 'December'];
+    
+    const getDayStatus = (dayNum) => {
+      const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+      const date = new Date(year, month, dayNum);
+      const todayDate = new Date();
+      todayDate.setHours(0, 0, 0, 0);
+      
+      // Future day
+      if (date > todayDate) return { status: 'future', count: 0 };
+      
+      // Before tracking started
+      if (firstEntryDate && date < new Date(firstEntryDate.getFullYear(), firstEntryDate.getMonth(), firstEntryDate.getDate())) {
+        return { status: 'before', count: 0 };
+      }
+      
+      // Check if we have entries
+      const count = entries[dateStr] || 0;
+      if (count > 0) return { status: 'done', count };
+      
+      // Missed day (after start, before today, no entry)
+      return { status: 'missed', count: 0 };
+    };
+    
+    // Calculate month stats
+    let monthTotal = 0;
+    let monthActiveDays = 0;
+    let monthMissedDays = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const { status, count } = getDayStatus(d);
+      if (status === 'done') {
+        monthTotal += count;
+        monthActiveDays++;
+      } else if (status === 'missed') {
+        monthMissedDays++;
+      }
+    }
+    
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-4">
+        <div className="max-w-md mx-auto">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-white">📅 Calendar</h2>
+            <button
+              onClick={() => setShowCalendar(false)}
+              className="bg-white/10 px-4 py-2 rounded-lg text-purple-300 hover:bg-white/20 transition-colors"
+            >
+              ← Back
+            </button>
+          </div>
+
+          {/* Month navigation */}
+          <div className="flex items-center justify-between mb-4">
+            <button
+              onClick={() => setCalendarMonth(new Date(year, month - 1, 1))}
+              className="w-10 h-10 rounded-full bg-white/10 text-white font-bold hover:bg-white/20 transition-all"
+            >
+              ←
+            </button>
+            <div className="text-white text-xl font-bold">
+              {monthNames[month]} {year}
+            </div>
+            <button
+              onClick={() => setCalendarMonth(new Date(year, month + 1, 1))}
+              disabled={month >= new Date().getMonth() && year >= new Date().getFullYear()}
+              className="w-10 h-10 rounded-full bg-white/10 text-white font-bold hover:bg-white/20 transition-all disabled:opacity-30"
+            >
+              →
+            </button>
+          </div>
+
+          {/* Month stats */}
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            <div className="bg-white/10 rounded-xl p-3 text-center">
+              <div className="text-white text-xl font-bold">{monthTotal.toLocaleString()}</div>
+              <div className="text-purple-300 text-xs">push-ups</div>
+            </div>
+            <div className="bg-green-500/20 rounded-xl p-3 text-center">
+              <div className="text-green-400 text-xl font-bold">{monthActiveDays}</div>
+              <div className="text-green-300 text-xs">active days</div>
+            </div>
+            <div className="bg-red-500/20 rounded-xl p-3 text-center">
+              <div className="text-red-400 text-xl font-bold">{monthMissedDays}</div>
+              <div className="text-red-300 text-xs">missed</div>
+            </div>
+          </div>
+
+          {/* Calendar grid */}
+          <div className="bg-white/10 backdrop-blur rounded-2xl p-4">
+            {/* Day headers */}
+            <div className="grid grid-cols-7 gap-1 mb-2">
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, i) => (
+                <div key={i} className="text-center text-purple-300 text-xs font-medium py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+            
+            {/* Calendar days */}
+            <div className="grid grid-cols-7 gap-1">
+              {/* Empty cells for days before month starts */}
+              {Array.from({ length: startingDayOfWeek }, (_, i) => (
+                <div key={`empty-${i}`} className="aspect-square" />
+              ))}
+              
+              {/* Actual days */}
+              {Array.from({ length: daysInMonth }, (_, i) => {
+                const dayNum = i + 1;
+                const { status, count } = getDayStatus(dayNum);
+                const isToday = getLocalDateString() === `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                
+                return (
+                  <div
+                    key={dayNum}
+                    className={`aspect-square rounded-lg flex flex-col items-center justify-center text-xs font-medium transition-all ${
+                      status === 'done' 
+                        ? 'bg-green-500 text-white' 
+                        : status === 'missed'
+                          ? 'bg-red-500/60 text-red-200'
+                          : status === 'future'
+                            ? 'bg-white/5 text-purple-400'
+                            : 'bg-white/5 text-purple-500'
+                    } ${isToday ? 'ring-2 ring-purple-400' : ''}`}
+                  >
+                    <span className={status === 'done' ? 'text-[10px] opacity-75' : ''}>{dayNum}</span>
+                    {status === 'done' && (
+                      <span className="text-[9px] font-bold">{count}</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Legend */}
+          <div className="flex items-center justify-center gap-4 mt-4 text-xs text-purple-300">
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-green-500"></span> Done
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-red-500/60"></span> Missed
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="w-3 h-3 rounded bg-white/10"></span> N/A
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Stats view
   if (showStats) {
     const overallPercent = (totalPushups / GOAL) * 100;
@@ -762,6 +929,12 @@ function App() {
               className="bg-white/10 p-2 rounded-lg text-purple-300 hover:bg-white/20"
             >
               📸
+            </button>
+            <button
+              onClick={() => setShowCalendar(true)}
+              className="bg-white/10 p-2 rounded-lg text-purple-300 hover:bg-white/20"
+            >
+              📅
             </button>
             <button
               onClick={() => setShowStats(true)}
