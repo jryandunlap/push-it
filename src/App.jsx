@@ -65,6 +65,7 @@ function App() {
   const [isDownloading, setIsDownloading] = useState(false);
   const fileInputRef = useRef(null);
   const beforeInputRef = useRef(null);
+  const retakeInputRef = useRef(null);
   const playIntervalRef = useRef(null);
 
   // Use local date, not UTC
@@ -220,6 +221,17 @@ function App() {
     const file = e.target.files?.[0];
     if (!file) return;
     processAndSavePhoto(file, 0, () => setShowBeforePrompt(false));
+  };
+
+  const handleRetakePhoto = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const milestone = photosArray[galleryIndex]?.milestone;
+    if (milestone === undefined) return;
+    processAndSavePhoto(file, milestone, () => {
+      // Reset input so same file can be selected again
+      if (retakeInputRef.current) retakeInputRef.current.value = '';
+    });
   };
 
   // Calculate stats
@@ -554,6 +566,27 @@ function App() {
                       month: 'long', day: 'numeric', year: 'numeric'
                     })}
                   </div>
+                  
+                  {/* Retake button - show if photo is less than 24 hours old */}
+                  {photosArray[galleryIndex]?.date && 
+                   (Date.now() - new Date(photosArray[galleryIndex].date).getTime()) < 24 * 60 * 60 * 1000 && (
+                    <>
+                      <input
+                        ref={retakeInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        onChange={handleRetakePhoto}
+                        className="hidden"
+                      />
+                      <button
+                        onClick={() => retakeInputRef.current?.click()}
+                        className="mt-2 text-sm text-purple-400 hover:text-purple-300 underline"
+                      >
+                        📷 Retake photo
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
